@@ -1,6 +1,6 @@
 {
-  "name": "My Fullscreen Web App",
-  "short_name": "Fullscreen App",
+  "name": "Color Swap",
+  "short_name": "Color Swap",
   "start_url": "./",
   "display": "fullscreen",
   "orientation": "any"
