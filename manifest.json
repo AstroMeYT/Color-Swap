@@ -1,0 +1,7 @@
+{
+  "name": "My Fullscreen Web App",
+  "short_name": "Fullscreen App",
+  "start_url": "./",
+  "display": "fullscreen",
+  "orientation": "any"
+}
