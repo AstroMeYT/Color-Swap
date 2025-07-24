@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sweet Swap Saga</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        /* Basic styling for the body and overall layout */
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background: linear-gradient(to bottom right, #87CEEB, #FFFACD); /* Sky blue to light yellow gradient */
+            font-family: 'Inter', sans-serif;
+            color: #333;
+            overflow: hidden; /* Prevent scrollbars */
+        }
+
+        /* Main game container styling */
+        .game-container {
+            background-color: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            position: relative; /* For absolute positioning of messages */
+        }
+
+        /* Game title styling */
+        h1 {
+            color: #d62828; /* Reddish */
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+            margin-bottom: 15px;
+            font-size: 2.5em;
+        }
+
+        /* Score display styling */
+        #scoreDisplay {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #007bff; /* Blue */
+            background-color: #e0f2f7;
+            padding: 10px 20px;
+            border-radius: 15px;
+            box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.1);
+            min-width: 150px;
+            text-align: center;
+        }
+
+        /* Canvas styling */
+        #gameCanvas {
+            border: 5px solid #4CAF50; /* Green border */
+            border-radius: 15px;
+            background-color: #e8f5e9; /* Light green background */
+            box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.1);
+            touch-action: none; /* Prevent default touch actions like scrolling */
+        }
+
+        /* Message box styling (for game over, etc.) */
+        #messageBox {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(255, 255, 255, 0.95);
+            border: 3px solid #FFC107; /* Amber border */
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            font-size: 2em;
+            font-weight: bold;
+            color: #FF5722; /* Deep orange */
+            display: none; /* Hidden by default */
+            z-index: 100; /* Ensure it's on top */
+        }
+
+        #messageBox button {
+            background-color: #4CAF50; /* Green */
+            color: white;
+            padding: 12px 25px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            cursor: pointer;
+            margin-top: 20px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.3s ease, transform 0.2s ease;
+        }
+
+        #messageBox button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2em;
+            }
+            #scoreDisplay {
+                font-size: 1.5em;
+            }
+            .game-container {
+                padding: 15px;
+                margin: 10px;
+            }
+            #messageBox {
+                font-size: 1.5em;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <h1>Sweet Swap Saga</h1>
+        <div id="scoreDisplay">Score: 0</div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="messageBox">
+            <span id="messageText"></span>
+            <button id="restartButton">Play Again</button>
+        </div>
+    </div>
+
+    <script>
+        // Get canvas and its 2D rendering context
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const messageBox = document.getElementById('messageBox');
+        const messageText = document.getElementById('messageText');
+        const restartButton = document.getElementById('restartButton');
+
+        // Game board dimensions and gem properties
+        const BOARD_COLS = 9;
+        const BOARD_ROWS = 9;
+        const GEM_SIZE = 60; // Size of each gem in pixels
+        const CANVAS_WIDTH = BOARD_COLS * GEM_SIZE;
+        const CANVAS_HEIGHT = BOARD_ROWS * GEM_SIZE;
+
+        // Set canvas dimensions
+        canvas.width = CANVAS_WIDTH;
+        canvas.height = CANVAS_HEIGHT;
+
+        // Game state variables
+        let board = []; // 2D array representing the game board, now storing Gem objects
+        const gemTypes = ['🔴', '🟠', '🟡', '🟢', '🔵', '🟣']; // Emojis for "candies"
+        const COLOR_BOMB_TYPE = '🌈'; // New emoji for the color bomb
+        let score = 0;
+        let selectedGem = null; // Stores the {row, col} of the first selected gem
+        let gameActive = true; // Flag to control game state (active or game over)
+        let inputBlocked = false; // Flag to block user input during animations
+
+        // Animation variables
+        let lastTime = 0;
+        const ANIMATION_SPEED = 0.3; // Speed multiplier for animations (higher = faster, adjusted for deltaTime in ms)
+        const FADE_SPEED = 0.003; // Speed for fading out matched gems (adjusted for deltaTime in ms)
+        let animationFrameId = null; // Initialize animationFrameId to null
+
+        // --- Gem Class (for better organization of gem properties) ---
+        class Gem {
+            constructor(row, col, type) {
+                this.row = row;
+                this.col = col;
+                this.type = type;
+                this.x = col * GEM_SIZE; // Current pixel X
+                this.y = row * GEM_SIZE; // Current pixel Y
+                this.targetX = this.x;   // Target pixel X
+                this.targetY = this.y;   // Target pixel Y
+                this.alpha = 1;          // Opacity for fading
+                this.state = 'IDLE';     // 'IDLE', 'SWAPPING', 'FALLING', 'REMOVING', 'APPEARING'
+            }
+
+            /**
+             * Updates the gem's position and state based on deltaTime.
+             * @param {number} deltaTime - Time elapsed since last frame in milliseconds.
+             */
+            update(deltaTime) {
+                const moveStep = ANIMATION_SPEED * deltaTime;
+                const epsilon = 1; // Small threshold for position comparison (increased slightly for faster speeds)
+
+                if (this.state === 'SWAPPING' || this.state === 'FALLING' || this.state === 'APPEARING') {
+                    let movedThisFrame = false;
+
+                    // Move towards targetX
+                    const dx = this.targetX - this.x;
+                    if (Math.abs(dx) > epsilon) {
+                        this.x += Math.min(Math.abs(dx), moveStep) * Math.sign(dx);
+                        movedThisFrame = true;
+                    } else {
+                        this.x = this.targetX; // Snap to target
+                    }
+
+                    // Move towards targetY
+                    const dy = this.targetY - this.y;
+                    if (Math.abs(dy) > epsilon) {
+                        this.y += Math.min(Math.abs(dy), moveStep) * Math.sign(dy);
+                        movedThisFrame = true;
+                    } else {
+                        this.y = this.targetY; // Snap to target
+                    }
+
+                    // If not moving and at target, transition to IDLE
+                    if (!movedThisFrame && Math.abs(dx) <= epsilon && Math.abs(dy) <= epsilon) {
+                        this.state = 'IDLE';
+                    }
+                } else if (this.state === 'REMOVING') {
+                    this.alpha -= FADE_SPEED * deltaTime;
+                    if (this.alpha <= 0) {
+                        this.alpha = 0;
+                        this.type = null; // Effectively remove the gem
+                        this.state = 'REMOVED'; // Mark as removed
+                    }
+                }
+            }
+
+            /**
+             * Draws the gem on the canvas.
+             * @param {CanvasRenderingContext2D} ctx - The 2D rendering context.
+             * @param {boolean} isSelected - True if this gem is currently selected.
+             */
+            draw(ctx, isSelected) {
+                if (this.type === null) return; // Don't draw removed gems
+
+                ctx.save(); // Save current canvas state
+                ctx.globalAlpha = this.alpha; // Apply opacity
+
+                // Draw the background square for the gem
+                ctx.fillStyle = '#f0f0f0'; // Light grey background for each cell
+                ctx.fillRect(this.x, this.y, GEM_SIZE, GEM_SIZE);
+
+                // Draw the gem emoji
+                ctx.font = `${GEM_SIZE * 0.7}px Arial`; // Adjust font size for emoji
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(this.type, this.x + GEM_SIZE / 2, this.y + GEM_SIZE / 2);
+
+                // Highlight selected gem
+                if (isSelected) {
+                    ctx.strokeStyle = '#FFD700'; // Gold color for selection
+                    ctx.lineWidth = 5;
+                    ctx.strokeRect(this.x + 2, this.y + 2, GEM_SIZE - 4, GEM_SIZE - 4);
+                }
+                ctx.restore(); // Restore canvas state
+            }
+        }
+
+        // --- Drawing Functions ---
+
+        /**
+         * Draws the entire game board.
+         */
+        function drawBoard() {
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); // Clear the entire canvas
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    const gem = board[r][c];
+                    if (gem) {
+                        gem.draw(ctx, selectedGem && selectedGem.row === r && selectedGem.col === c);
+                    }
+                }
+            }
+        }
+
+        // --- Game Initialization ---
+
+        /**
+         * Initializes the game board with random gems, ensuring no initial matches.
+         */
+        function initializeBoard() {
+            score = 0;
+            updateScore(0); // Reset score display
+            gameActive = true;
+            inputBlocked = false;
+            messageBox.style.display = 'none'; // Hide message box
+            selectedGem = null;
+
+            board = []; // Clear previous board
+
+            // Create initial gems, ensuring no immediate matches
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                board[r] = [];
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    board[r][c] = getRandomGem(r, c);
+                }
+            }
+
+            // Immediately resolve any initial matches without animation
+            // This is done before starting the main game loop to ensure a clean start
+            let initialMatchesExist;
+            do {
+                initialMatchesExist = checkAndResolveMatches(false); // No animation for initial setup
+            } while (initialMatchesExist);
+
+            // Start the game loop
+            // Ensure animationFrameId is cancelled before starting a new one
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        /**
+         * Gets a random gem type, ensuring it doesn't create an immediate match
+         * with its left or top neighbors during initial board generation.
+         * @param {number} row - The current row for the gem.
+         * @param {number} col - The current column for the gem.
+         * @returns {Gem} A new Gem object with a random type.
+         */
+        function getRandomGem(row, col) {
+            let newType;
+            do {
+                newType = gemTypes[Math.floor(Math.random() * gemTypes.length)];
+            } while (
+                // Prevent horizontal match of 3
+                (col >= 2 && board[row][col - 1]?.type === newType && board[row][col - 2]?.type === newType) ||
+                // Prevent vertical match of 3
+                (row >= 2 && board[row - 1][col]?.type === newType && board[row - 2][col]?.type === newType)
+            );
+            return new Gem(row, col, newType);
+        }
+
+        // --- Game Loop and Animation Management ---
+
+        /**
+         * The main game loop, called repeatedly by requestAnimationFrame.
+         * Handles animation updates and triggers game logic when animations are complete.
+         * @param {DOMHighResTimeStamp} currentTime - The current time provided by requestAnimationFrame.
+         */
+        function gameLoop(currentTime) {
+            const deltaTime = currentTime - lastTime; // Delta time in milliseconds
+            lastTime = currentTime;
+
+            updateAnimations(deltaTime);
+            drawBoard();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        /**
+         * Updates the positions and states of all gems for animation.
+         * @param {number} deltaTime - Time elapsed since last frame in milliseconds.
+         */
+        function updateAnimations(deltaTime) {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    const gem = board[r][c];
+                    if (gem) {
+                        gem.update(deltaTime);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Returns a Promise that resolves when all specified gems have completed their animation state.
+         * @param {Array<Object>} gemsToMonitor - An array of gem objects to monitor.
+         * @param {string} stateToWaitFor - The animation state to wait for (e.g., 'SWAPPING', 'REMOVING', 'FALLING', 'APPEARING').
+         * @returns {Promise<void>} A promise that resolves when all gems are no longer in the specified state.
+         */
+        function waitForAnimations(gemsToMonitor, stateToWaitFor) {
+            return new Promise(resolve => {
+                const check = () => {
+                    // Filter out null or removed gems from the monitoring list
+                    const activeGems = gemsToMonitor.filter(gem => gem && gem.type !== null);
+                    const allComplete = !activeGems.some(gem => gem.state === stateToWaitFor);
+
+                    if (allComplete) {
+                        resolve();
+                    } else {
+                        requestAnimationFrame(check);
+                    }
+                };
+                requestAnimationFrame(check); // Start checking on the next frame
+            });
+        }
+
+        /**
+         * Processes the entire game cycle after a player's move or a cascade.
+         * This includes finding matches, removing them, dropping gems, filling new gems,
+         * and recursively checking for new cascades until the board is stable.
+         * @param {boolean} animate - Whether to animate the process.
+         */
+        async function processGameCycle(animate) {
+            inputBlocked = true; // Block input during the entire game cycle
+
+            let currentMatches;
+            let didAnyMatchesOccur = false; // Flag to track if any matches were found in the entire cycle
+
+            do {
+                currentMatches = findMatches();
+                if (currentMatches.length > 0) {
+                    didAnyMatchesOccur = true; // Mark that matches were found
+                    updateScore(currentMatches.length * 10);
+
+                    // Phase 1: Remove matches (fade out) and create special candies
+                    const { removedGems } = removeMatches(currentMatches, animate);
+                    if (animate) {
+                        // Wait for all removed gems to complete their REMOVING animation
+                        await waitForAnimations(removedGems, 'REMOVING');
+                    }
+                }
+
+                // Always perform drops and fills after any removal, even if no new matches were found
+                // This is crucial for color bomb effects and general gravity/refill
+                dropGems(animate);
+                if (animate) {
+                    const fallingGems = board.flat().filter(gem => gem && gem.state === 'FALLING');
+                    await waitForAnimations(fallingGems, 'FALLING');
+                }
+
+                fillEmptySpots(animate);
+                if (animate) {
+                    const appearingGems = board.flat().filter(gem => gem && gem.state === 'APPEARING');
+                    await waitForAnimations(appearingGems, 'APPEARING');
+                }
+
+                // Loop back to check for new matches after drops and fills,
+                // ONLY if matches were found in the current iteration of the do-while loop.
+                // This correctly handles cascades.
+            } while (findMatches().length > 0); // Continue if new matches formed after drops/fills
+
+            inputBlocked = false; // Unblock input when all animations and cascades are done
+
+            // Final check for game over
+            if (!checkForPossibleMoves()) {
+                gameOver();
+            }
+        }
+
+
+        // --- Event Handling ---
+
+        /**
+         * Handles click/touch events on the canvas.
+         * @param {Event} event - The click or touch event object.
+         */
+        canvas.addEventListener('click', async (event) => { // Made async to use await
+            if (!gameActive || inputBlocked) return; // Ignore clicks if game is over or input is blocked
+
+            const rect = canvas.getBoundingClientRect();
+            // Calculate mouse/touch coordinates relative to the canvas
+            const clientX = event.clientX || event.touches[0].clientX;
+            const clientY = event.clientY || event.touches[0].clientY;
+
+            const mouseX = clientX - rect.left;
+            const mouseY = clientY - rect.top;
+
+            // Determine the clicked grid cell
+            const clickedCol = Math.floor(mouseX / GEM_SIZE);
+            const clickedRow = Math.floor(mouseY / GEM_SIZE);
+
+            if (selectedGem === null) {
+                // First gem selected
+                selectedGem = { row: clickedRow, col: clickedCol };
+            } else {
+                // Second gem selected, attempt a swap
+                const firstGemRow = selectedGem.row;
+                const firstGemCol = selectedGem.col;
+                const secondGemRow = clickedRow;
+                const secondGemCol = clickedCol;
+
+
+                // Check if gems are adjacent (horizontally or vertically)
+                const isAdjacent = (
+                    (Math.abs(firstGemRow - secondGemRow) === 1 && firstGemCol === secondGemCol) || // Vertical
+                    (Math.abs(firstGemCol - secondGemCol) === 1 && firstGemRow === secondGemRow)   // Horizontal
+                );
+
+                if (isAdjacent) {
+                    inputBlocked = true; // Block input during swap animation and subsequent logic
+
+                    // Get gem objects
+                    const gem1 = board[firstGemRow][firstGemCol];
+                    const gem2 = board[secondGemRow][secondGemCol];
+
+                    // --- Handle Color Bomb Activation ---
+                    if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE) {
+                        let colorBomb = null;
+                        let targetGem = null;
+
+                        if (gem1.type === COLOR_BOMB_TYPE) {
+                            colorBomb = gem1;
+                            targetGem = gem2;
+                        } else {
+                            colorBomb = gem2;
+                            targetGem = gem1;
+                        }
+
+                        // Perform the swap visually for the color bomb activation
+                        gem1.targetX = secondGemCol * GEM_SIZE;
+                        gem1.targetY = secondGemRow * GEM_SIZE;
+                        gem1.state = 'SWAPPING';
+
+                        gem2.targetX = firstGemCol * GEM_SIZE;
+                        gem2.targetY = firstGemRow * GEM_SIZE;
+                        gem2.state = 'SWAPPING';
+                        swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
+                        await waitForAnimations([gem1, gem2], 'SWAPPING');
+
+                        // Activate the color bomb
+                        await activateColorBomb(colorBomb, targetGem, true); // Pass true for animation
+                        await processGameCycle(true); // Process the resulting cascade
+                        inputBlocked = false; // Unblock after bomb effect and cascade
+                    }
+                    // --- Regular Swap Logic ---
+                    else {
+                        // Set target positions for animation
+                        gem1.targetX = secondGemCol * GEM_SIZE;
+                        gem1.targetY = secondGemRow * GEM_SIZE;
+                        gem1.state = 'SWAPPING';
+
+                        gem2.targetX = firstGemCol * GEM_SIZE;
+                        gem2.targetY = firstGemRow * GEM_SIZE;
+                        gem2.state = 'SWAPPING';
+
+                        // Update board array immediately for logic
+                        swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
+
+                        // Wait for the swap animation to complete
+                        await waitForAnimations([gem1, gem2], 'SWAPPING');
+
+                        // After swap, check if any matches are formed
+                        if (findMatches().length > 0) {
+                            // If match, process the game cycle (remove, drop, fill, cascades)
+                            await processGameCycle(true);
+                        } else {
+                            // If no match, swap back
+                            // Animate gems sliding back
+                            gem1.targetX = firstGemCol * GEM_SIZE;
+                            gem1.targetY = firstGemRow * GEM_SIZE;
+                            gem1.state = 'SWAPPING';
+
+                            gem2.targetX = secondGemCol * GEM_SIZE;
+                            gem2.targetY = secondGemRow * GEM_SIZE;
+                            gem2.state = 'SWAPPING';
+
+                            swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol); // Swap back in board array
+
+                            await waitForAnimations([gem1, gem2], 'SWAPPING'); // Wait for reverse swap animation
+                            inputBlocked = false; // Unblock input after reverse swap
+                        }
+                    }
+                }
+                selectedGem = null; // Reset selection after attempting a swap
+            }
+        });
+
+        // Add touch event listeners for mobile devices
+        canvas.addEventListener('touchstart', (event) => {
+            event.preventDefault(); // Prevent scrolling
+            canvas.dispatchEvent(new MouseEvent('click', {
+                clientX: event.touches[0].clientX,
+                clientY: event.touches[0].clientY
+            }));
+        }, false);
+
+        // Restart button click handler
+        restartButton.addEventListener('click', () => {
+            initializeBoard();
+        });
+
+        // --- Core Game Logic Functions ---
+
+        /**
+         * Swaps the positions of two gems in the board array (logic only).
+         * This does not handle animation, only updates the data structure.
+         * @param {number} r1 - Row of the first gem.
+         * @param {number} c1 - Column of the first gem.
+         * @param {number} r2 - Row of the second gem.
+         * @param {number} c2 - Column of the second gem.
+         */
+        function swapGemsInBoard(r1, c1, r2, c2) {
+            const temp = board[r1][c1];
+            board[r1][c1] = board[r2][c2];
+            board[r2][c2] = temp;
+
+            // Update row/col properties of the Gem objects
+            if (board[r1][c1]) {
+                board[r1][c1].row = r1;
+                board[r1][c1].col = c1;
+            }
+            if (board[r2][c2]) {
+                board[r2][c2].row = r2;
+                board[r2][c2].col = c2;
+            }
+        }
+
+        /**
+         * Checks for and resolves all matches on the board. This function handles
+         * cascading matches (gems falling, new matches forming).
+         * This is now primarily used by initializeBoard (without animation)
+         * and by processGameCycle (with animation).
+         * @param {boolean} animate - Whether to animate the match resolution process.
+         * @returns {object} An object containing `matchesFound` (boolean) and `specialCreations` (array of {row, col, type}).
+         */
+        function checkAndResolveMatches(animate) {
+            const matches = findMatches();
+            let matchesFound = matches.length > 0;
+            const specialCreations = []; // Not used directly here, but could be for other special candies
+
+            if (matchesFound) {
+                // Filter out matches that are 5-in-a-row for special candy creation
+                const fiveInARowMatches = matches.filter(m => m.length >= 5);
+                const regularMatches = matches.filter(m => m.length < 5);
+
+                // Handle 5-in-a-row matches for color bomb creation
+                fiveInARowMatches.forEach(matchGroup => {
+                    // Pick the last gem in the match group to become the color bomb
+                    const lastGemCoords = matchGroup[matchGroup.length - 1];
+                    const gemToReplace = board[lastGemCoords.row][lastGemCoords.col];
+
+                    if (gemToReplace) {
+                        // Mark other gems in the 5-match for removal
+                        matchGroup.forEach(m => {
+                            if (!(m.row === lastGemCoords.row && m.col === lastGemCoords.col)) {
+                                const gem = board[m.row][m.col];
+                                if (gem) {
+                                    if (animate) {
+                                        gem.state = 'REMOVING';
+                                    } else {
+                                        gem.type = null;
+                                        gem.alpha = 0;
+                                        gem.state = 'REMOVED';
+                                    }
+                                }
+                            }
+                        });
+
+                        // Create the color bomb at the chosen position
+                        gemToReplace.type = COLOR_BOMB_TYPE;
+                        gemToReplace.state = 'IDLE'; // Or a special creation animation state
+                        gemToReplace.alpha = 1; // Ensure it's visible
+                        specialCreations.push({ row: lastGemCoords.row, col: lastGemCoords.col, type: COLOR_BOMB_TYPE });
+                        updateScore(matchGroup.length * 10); // Score for the 5-match
+                    }
+                });
+
+                // Handle regular matches (3 or 4 in a row)
+                regularMatches.forEach(matchGroup => {
+                    matchGroup.forEach(m => {
+                        const gem = board[m.row][m.col];
+                        if (gem) {
+                            if (animate) {
+                                gem.state = 'REMOVING';
+                            } else {
+                                gem.type = null;
+                                gem.alpha = 0;
+                                gem.state = 'REMOVED';
+                            }
+                        }
+                    });
+                    updateScore(matchGroup.length * 10); // Score for regular matches
+                });
+
+                // If not animating, immediately apply changes
+                if (!animate) {
+                    dropGems(false);
+                    fillEmptySpots(false);
+                    drawBoard(); // Redraw immediately
+                    // Recursively check for new matches until stable
+                    if (findMatches().length > 0) {
+                        checkAndResolveMatches(false); // Recursive call for cascades
+                    }
+                }
+            }
+            return matchesFound;
+        }
+
+        /**
+         * Finds all horizontal and vertical matches of 3 or more gems.
+         * Returns an array of arrays, where each inner array is a group of matched gem coordinates.
+         * @returns {Array<Array<Object>>} An array of arrays, each containing {row, col} objects for a match group.
+         */
+        function findMatches() {
+            const allMatches = []; // Stores arrays of {row, col} for each match group
+            const matchedPositions = new Set(); // To avoid duplicate processing of gems in L/T shapes
+
+            // Helper to add a match group to allMatches
+            const addMatchGroup = (group) => {
+                if (group.length >= 3) {
+                    allMatches.push(group);
+                    group.forEach(m => matchedPositions.add(JSON.stringify(m)));
+                }
+            };
+
+            // Check horizontal matches
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS - 2; c++) {
+                    const gemType = board[r][c]?.type;
+                    if (gemType === null || gemType === undefined || gemType === COLOR_BOMB_TYPE) continue; // Skip empty or color bombs
+
+                    const currentGroup = [{ row: r, col: c }];
+                    for (let k = c + 1; k < BOARD_COLS; k++) {
+                        if (board[r][k]?.type === gemType) {
+                            currentGroup.push({ row: r, col: k });
+                        } else {
+                            break;
+                        }
+                    }
+                    addMatchGroup(currentGroup);
+                }
+            }
+
+            // Check vertical matches
+            for (let c = 0; c < BOARD_COLS; c++) {
+                for (let r = 0; r < BOARD_ROWS - 2; r++) {
+                    const gemType = board[r][c]?.type;
+                    if (gemType === null || gemType === undefined || gemType === COLOR_BOMB_TYPE) continue; // Skip empty or color bombs
+
+                    const currentGroup = [{ row: r, col: c }];
+                    for (let k = r + 1; k < BOARD_ROWS; k++) {
+                        if (board[k][c]?.type === gemType) {
+                            currentGroup.push({ row: k, col: c });
+                        } else {
+                            break;
+                        }
+                    }
+                    addMatchGroup(currentGroup);
+                }
+            }
+
+            // Filter out duplicate positions if a gem is part of multiple matches (e.g., L/T shapes)
+            // This ensures each gem is only removed once, and special candies are created correctly.
+            const uniqueMatches = [];
+            const processedPositions = new Set(); // To track positions already added to uniqueMatches
+            allMatches.forEach(group => {
+                const uniqueGroup = group.filter(m => !processedPositions.has(JSON.stringify(m)));
+                if (uniqueGroup.length > 0) {
+                    uniqueMatches.push(uniqueGroup);
+                    uniqueGroup.forEach(m => processedPositions.add(JSON.stringify(m)));
+                }
+            });
+
+            return uniqueMatches;
+        }
+
+        /**
+         * Removes matched gems (sets their type to null and starts removal animation).
+         * For 5-in-a-row matches, it creates a color bomb.
+         * @param {Array<Array<Object>>} matches - An array of match groups (each an array of {row, col}).
+         * @param {boolean} animate - Whether to animate the removal.
+         * @returns {object} An object containing `removedGems` (array of Gem objects that were removed) and `specialCreations` (array of {row, col, type}).
+         */
+        function removeMatches(matches, animate) {
+            const removedGems = [];
+            const specialCreations = []; // Not used directly here, but could be for other special candies
+
+            matches.forEach(matchGroup => {
+                // Check if this is a 5-in-a-row match
+                if (matchGroup.length >= 5) {
+                    // Find a suitable position for the color bomb (e.g., the first gem in the match)
+                    const colorBombPos = matchGroup[0];
+                    const colorBombGem = board[colorBombPos.row][colorBombPos.col];
+
+                    if (colorBombGem) {
+                        // Set the gem at colorBombPos to be the COLOR_BOMB_TYPE
+                        colorBombGem.type = COLOR_BOMB_TYPE;
+                        colorBombGem.state = 'IDLE'; // Or a special creation animation
+                        colorBombGem.alpha = 1; // Ensure it's fully visible
+
+                        // Mark other gems in this match group for removal
+                        matchGroup.forEach(m => {
+                            if (!(m.row === colorBombPos.row && m.col === colorBombPos.col)) {
+                                const gem = board[m.row][m.col];
+                                if (gem) {
+                                    if (animate) {
+                                        gem.state = 'REMOVING';
+                                    } else {
+                                        gem.type = null;
+                                        gem.alpha = 0;
+                                        gem.state = 'REMOVED';
+                                    }
+                                    removedGems.push(gem);
+                                }
+                            }
+                        });
+                        updateScore(matchGroup.length * 10); // Score for the 5-match
+                    }
+                } else {
+                    // Regular match (3 or 4 in a row) - remove all gems in the group
+                    matchGroup.forEach(m => {
+                        const gem = board[m.row][m.col];
+                        if (gem) {
+                            if (animate) {
+                                gem.state = 'REMOVING';
+                            } else {
+                                gem.type = null;
+                                gem.alpha = 0;
+                                gem.state = 'REMOVED';
+                            }
+                            removedGems.push(gem);
+                        }
+                    });
+                    updateScore(matchGroup.length * 10); // Score for regular matches
+                }
+            });
+            return { removedGems, specialCreations };
+        }
+
+        /**
+         * Activates a color bomb, clearing all candies of a specific type or the entire board.
+         * @param {Gem} colorBomb - The color bomb gem that was activated.
+         * @param {Gem} targetGem - The gem it was swapped with (or itself if double color bomb).
+         * @param {boolean} animate - Whether to animate the clearing.
+         * @returns {Promise<void>} A promise that resolves when the clearing animation is complete.
+         */
+        async function activateColorBomb(colorBomb, targetGem, animate) {
+            const gemsToClear = [];
+            let targetTypeToClear = null;
+
+            // Remove the color bomb itself
+            if (animate) {
+                colorBomb.state = 'REMOVING';
+            } else {
+                colorBomb.type = null;
+                colorBomb.alpha = 0;
+                colorBomb.state = 'REMOVED';
+            }
+            gemsToClear.push(colorBomb);
+            updateScore(100); // Score for activating color bomb
+
+            if (targetGem.type === COLOR_BOMB_TYPE) {
+                // Double color bomb activation - clear entire board
+                for (let r = 0; r < BOARD_ROWS; r++) {
+                    for (let c = 0; c < BOARD_COLS; c++) {
+                        const gem = board[r][c];
+                        if (gem && gem.type !== null && gem !== colorBomb && gem !== targetGem) { // Don't re-add the bombs
+                            if (animate) {
+                                gem.state = 'REMOVING';
+                            } else {
+                                gem.type = null;
+                                gem.alpha = 0;
+                                gem.state = 'REMOVED';
+                            }
+                            gemsToClear.push(gem);
+                            updateScore(10); // Score for each cleared gem
+                        }
+                    }
+                }
+                 // Remove the second color bomb
+                if (animate) {
+                    targetGem.state = 'REMOVING';
+                } else {
+                    targetGem.type = null;
+                    targetGem.alpha = 0;
+                    targetGem.state = 'REMOVED';
+                }
+                gemsToClear.push(targetGem);
+            } else {
+                // Color bomb swapped with a regular candy - clear all of that type
+                targetTypeToClear = targetGem.type;
+                for (let r = 0; r < BOARD_ROWS; r++) {
+                    for (let c = 0; c < BOARD_COLS; c++) {
+                        const gem = board[r][c];
+                        if (gem && gem.type === targetTypeToClear) {
+                            if (animate) {
+                                gem.state = 'REMOVING';
+                            } else {
+                                gem.type = null;
+                                gem.alpha = 0;
+                                gem.state = 'REMOVED';
+                            }
+                            gemsToClear.push(gem);
+                            updateScore(10); // Score for each cleared gem
+                        }
+                    }
+                }
+            }
+
+            if (animate) {
+                await waitForAnimations(gemsToClear, 'REMOVING');
+            }
+        }
+
+
+        /**
+         * Drops gems down to fill empty spaces created by removed matches.
+         * Updates gem objects' targetY and state for animation.
+         * @param {boolean} animate - Whether to animate the drop.
+         */
+        function dropGems(animate) {
+            for (let c = 0; c < BOARD_COLS; c++) {
+                let emptySpots = 0; // Counter for empty spots in the current column
+                // Iterate from bottom to top
+                for (let r = BOARD_ROWS - 1; r >= 0; r--) {
+                    const gem = board[r][c];
+                    if (gem && gem.type === null) { // If it's a removed gem
+                        emptySpots++; // Found an empty spot
+                    } else if (gem && emptySpots > 0) {
+                        // If there are empty spots below, move the gem down
+                        board[r + emptySpots][c] = gem; // Move gem object in array
+                        board[r][c] = new Gem(r, c, null); // Create an empty placeholder at old spot
+
+                        gem.row = r + emptySpots; // Update gem's internal row
+                        gem.col = c;              // Update gem's internal col
+                        gem.targetY = (r + emptySpots) * GEM_SIZE; // Set target for animation
+                        if (animate) {
+                            gem.state = 'FALLING';
+                        } else {
+                            gem.y = gem.targetY; // Immediately move if not animating
+                            gem.state = 'IDLE';
+                        }
+                    }
+                }
+            }
+        }
+
+        /**
+         * Fills any remaining empty spots (at the top of columns) with new random gems.
+         * Sets initial position above canvas for 'APPEARING' animation.
+         * @param {boolean} animate - Whether to animate the appearance.
+         */
+        function fillEmptySpots(animate) {
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    const gem = board[r][c];
+                    if (gem && gem.type === null) { // If it's an empty spot
+                        const newGem = getRandomGem(r, c);
+                        newGem.alpha = 1; // Ensure new gems are fully opaque
+                        newGem.targetX = c * GEM_SIZE;
+                        newGem.targetY = r * GEM_SIZE;
+                        if (animate) {
+                            newGem.y = -GEM_SIZE; // Start above the canvas for drop animation
+                            newGem.state = 'APPEARING';
+                        } else {
+                            newGem.y = newGem.targetY; // Immediately place if not animating
+                            newGem.state = 'IDLE';
+                        }
+                        board[r][c] = newGem;
+                    }
+                }
+            }
+        }
+
+        /**
+         * Updates the score and displays it on the screen.
+         * @param {number} points - The points to add to the current score.
+         */
+        function updateScore(points) {
+            score += points;
+            scoreDisplay.textContent = `Score: ${score}`;
+        }
+
+        /**
+         * Checks if there are any possible valid moves left on the board.
+         * This is a simplified check and can be made more robust for a real game.
+         * @returns {boolean} True if a possible move exists, false otherwise.
+         */
+        function checkForPossibleMoves() {
+            // Iterate through each gem on the board
+            for (let r = 0; r < BOARD_ROWS; r++) {
+                for (let c = 0; c < BOARD_COLS; c++) {
+                    const originalGem = board[r][c];
+                    if (!originalGem || originalGem.type === null) continue; // Skip empty spots
+
+                    // Temporarily store original type
+                    const originalGemType = originalGem.type;
+
+                    // Try swapping with right neighbor
+                    if (c + 1 < BOARD_COLS) {
+                        const neighborGem = board[r][c + 1];
+                        if (neighborGem && neighborGem.type !== null) {
+                            const neighborGemType = neighborGem.type;
+
+                            // Perform a "virtual" swap by changing types
+                            originalGem.type = neighborGemType;
+                            neighborGem.type = originalGemType;
+
+                            if (findMatches().length > 0 || (originalGem.type === COLOR_BOMB_TYPE && neighborGemType !== COLOR_BOMB_TYPE) || (neighborGem.type === COLOR_BOMB_TYPE && originalGemType !== COLOR_BOMB_TYPE)) {
+                                // If a match is found OR a color bomb is involved in a swap
+                                // Swap back
+                                originalGem.type = originalGemType;
+                                neighborGem.type = neighborGemType;
+                                return true; // Found a possible move
+                            }
+                            // Swap back
+                            originalGem.type = originalGemType;
+                            neighborGem.type = neighborGemType;
+                        }
+                    }
+
+                    // Try swapping with bottom neighbor
+                    if (r + 1 < BOARD_ROWS) {
+                        const neighborGem = board[r + 1][c];
+                        if (neighborGem && neighborGem.type !== null) {
+                            const neighborGemType = neighborGem.type;
+
+                            // Perform a "virtual" swap by changing types
+                            originalGem.type = neighborGemType;
+                            neighborGem.type = originalGemType;
+
+                            if (findMatches().length > 0 || (originalGem.type === COLOR_BOMB_TYPE && neighborGemType !== COLOR_BOMB_TYPE) || (neighborGem.type === COLOR_BOMB_TYPE && originalGemType !== COLOR_BOMB_TYPE)) {
+                                // If a match is found OR a color bomb is involved in a swap
+                                // Swap back
+                                originalGem.type = originalGemType;
+                                neighborGem.type = neighborGemType;
+                                return true; // Found a possible move
+                            }
+                            // Swap back
+                            originalGem.type = originalGemType;
+                            neighborGem.type = neighborGemType;
+                        }
+                    }
+                }
+            }
+            return false; // No possible moves found
+        }
+
+
+        /**
+         * Displays the game over message and sets gameActive to false.
+         */
+        function gameOver() {
+            gameActive = false;
+            cancelAnimationFrame(animationFrameId); // Stop the game loop
+            animationFrameId = null;
+            messageText.textContent = `Game Over! Your Score: ${score}`;
+            messageBox.style.display = 'block';
+        }
+
+        // --- Initial Game Setup ---
+        window.onload = function() {
+            initializeBoard();
+        };
+
+    </script>
+</body>
+</html>
+
+
