@@ -3,7 +3,6 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="apple-mobile-web-app-capable" content="yes">
     <title>Color Swap</title>
     <link rel="manifest" href="/manifest.json">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
@@ -173,6 +172,8 @@
         const soundDelete = new Audio('delete.wav');
         const soundBombExplode = new Audio('bomb_explode.wav');
         const soundRainbowActivate = new Audio('rainbow_activate.wav');
+        const soundAmbientMusic = new Audio('ambient_music.wav'); // Ambient music
+        soundAmbientMusic.loop = true; // Loop the ambient music
 
         /**
          * Plays a specified sound.
@@ -337,6 +338,9 @@
                 cancelAnimationFrame(animationFrameId);
             }
             animationFrameId = requestAnimationFrame(gameLoop);
+
+            // Play ambient music
+            soundAmbientMusic.play().catch(e => console.error("Error playing ambient music:", e));
         }
 
         /**
@@ -1184,6 +1188,8 @@
             animationFrameId = null;
             messageText.textContent = `Game Over! Your Score: ${score}`;
             messageBox.style.display = 'block';
+            soundAmbientMusic.pause(); // Pause ambient music on game over
+            soundAmbientMusic.currentTime = 0; // Reset music to start
         }
 
         // --- Initial Game Setup ---
@@ -1194,4 +1200,3 @@
     </script>
 </body>
 </html>
-v1.2
