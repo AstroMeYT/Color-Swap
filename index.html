@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Color Swap</title>
-    <link rel="manifest" href="/manifest.json"> <!-- Added manifest link -->
+    <link rel="manifest" href="/manifest.json">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
         /* Basic styling for the body and overall layout */
@@ -155,6 +155,7 @@
         let board = []; // 2D array representing the game board, now storing Gem objects
         const gemTypes = ['red', 'orange', 'yellow', 'green', 'blue', 'purple']; // Colors for "candies"
         const COLOR_BOMB_TYPE = '🌈'; // New emoji for the color bomb
+        const BOMB_TYPE = '💣'; // New emoji for the bomb
         let score = 0;
         let selectedGem = null; // Stores the {row, col} of the first selected gem
         let gameActive = true; // Flag to control game state (active or game over)
@@ -165,6 +166,22 @@
         const ANIMATION_SPEED = 0.6; // Speed multiplier for animations (higher = faster, adjusted for deltaTime in ms)
         const FADE_SPEED = 0.006; // Speed for fading out matched gems (adjusted for deltaTime in ms)
         let animationFrameId = null; // Initialize animationFrameId to null
+
+        // Sound effects
+        const soundSwap = new Audio('swap.wav');
+        const soundDelete = new Audio('delete.wav');
+        const soundBombExplode = new Audio('bomb_explode.wav');
+        const soundRainbowActivate = new Audio('rainbow_activate.wav');
+
+        /**
+         * Plays a specified sound.
+         * @param {Audio} sound - The Audio object to play.
+         */
+        function playSound(sound) {
+            // Clone the node to allow multiple simultaneous plays without cutting off previous ones
+            const clonedSound = sound.cloneNode();
+            clonedSound.play().catch(e => console.error("Error playing sound:", e));
+        }
 
         // --- Gem Class (for better organization of gem properties) ---
         class Gem {
@@ -239,7 +256,7 @@
                 ctx.fillRect(this.x, this.y, GEM_SIZE, GEM_SIZE);
 
                 // Draw the gem (circle or emoji)
-                if (this.type === COLOR_BOMB_TYPE) {
+                if (this.type === COLOR_BOMB_TYPE || this.type === BOMB_TYPE) {
                     ctx.font = `${GEM_SIZE * 0.7}px Arial`; // Adjust font size for emoji
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
@@ -412,12 +429,13 @@
                 didAnyGemsChange = false; // Reset for each iteration of the cascade loop
                 currentMatches = findMatches();
 
-                if (currentMatches.length > 0) {
+                if (currentMatches.matches.length > 0) { // Check currentMatches.matches
                     didAnyGemsChange = true; // Mark that matches were found
-                    updateScore(currentMatches.length * 10);
+                    updateScore(currentMatches.matches.length * 10);
+                    playSound(soundDelete); // Play delete sound for regular matches
 
                     // Phase 1: Remove matches (fade out) and create special candies
-                    const { removedGems } = removeMatches(currentMatches, animate);
+                    const { removedGems } = removeMatches(currentMatches, animate); // Pass the full object
                     if (animate) {
                         // Wait for all removed gems to complete their REMOVING animation
                         await waitForAnimations(removedGems, 'REMOVING');
@@ -452,7 +470,7 @@
                 }
 
                 // Continue looping if any matches were found OR if gems moved/appeared
-            } while (didAnyGemsChange || findMatches().length > 0);
+            } while (didAnyGemsChange || findMatches().matches.length > 0); // Check currentMatches.matches
 
             inputBlocked = false; // Unblock input when all animations and cascades are done
 
@@ -484,6 +502,20 @@
             const clickedCol = Math.floor(mouseX / GEM_SIZE);
             const clickedRow = Math.floor(mouseY / GEM_SIZE);
 
+            const clickedGem = board[clickedRow][clickedCol];
+
+            // --- Direct Bomb Tap Activation ---
+            if (clickedGem && clickedGem.type === BOMB_TYPE && selectedGem === null) {
+                inputBlocked = true;
+                playSound(soundBombExplode); // Play bomb explode sound
+                await activateBomb(clickedGem, true);
+                await processGameCycle(true);
+                inputBlocked = false;
+                selectedGem = null;
+                return; // Exit as bomb was activated directly
+            }
+
+
             if (selectedGem === null) {
                 // First gem selected
                 selectedGem = { row: clickedRow, col: clickedCol };
@@ -508,20 +540,11 @@
                     const gem1 = board[firstGemRow][firstGemCol];
                     const gem2 = board[secondGemRow][secondGemCol];
 
-                    // --- Handle Color Bomb Activation ---
-                    if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE) {
-                        let colorBomb = null;
-                        let targetGem = null;
+                    // --- Handle Special Candy Swaps (Color Bomb or Bomb) ---
+                    if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE || gem1.type === BOMB_TYPE || gem2.type === BOMB_TYPE) {
+                        playSound(soundSwap); // Play swap sound for special candy swaps
 
-                        if (gem1.type === COLOR_BOMB_TYPE) {
-                            colorBomb = gem1;
-                            targetGem = gem2;
-                        } else {
-                            colorBomb = gem2;
-                            targetGem = gem1;
-                        }
-
-                        // Perform the swap visually for the color bomb activation
+                        // Perform the swap visually
                         gem1.targetX = secondGemCol * GEM_SIZE;
                         gem1.targetY = secondGemRow * GEM_SIZE;
                         gem1.state = 'SWAPPING';
@@ -532,13 +555,27 @@
                         swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
                         await waitForAnimations([gem1, gem2], 'SWAPPING');
 
-                        // Activate the color bomb
-                        await activateColorBomb(colorBomb, targetGem, true); // Pass true for animation
+                        // Determine which special candy (if any) was involved and activate
+                        if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE) {
+                            let colorBomb = (gem1.type === COLOR_BOMB_TYPE) ? gem1 : gem2;
+                            let targetGem = (colorBomb === gem1) ? gem2 : gem1;
+                            playSound(soundRainbowActivate); // Play rainbow activate sound
+                            await activateColorBomb(colorBomb, targetGem, true);
+                        } else if (gem1.type === BOMB_TYPE) {
+                            playSound(soundBombExplode); // Play bomb explode sound
+                            await activateBomb(gem1, true);
+                        } else if (gem2.type === BOMB_TYPE) {
+                            playSound(soundBombExplode); // Play bomb explode sound
+                            await activateBomb(gem2, true);
+                        }
+
                         await processGameCycle(true); // Process the resulting cascade
                         inputBlocked = false; // Unblock after bomb effect and cascade
                     }
                     // --- Regular Swap Logic ---
                     else {
+                        playSound(soundSwap); // Play swap sound for regular swaps
+
                         // Set target positions for animation
                         gem1.targetX = secondGemCol * GEM_SIZE;
                         gem1.targetY = secondGemRow * GEM_SIZE;
@@ -555,7 +592,7 @@
                         await waitForAnimations([gem1, gem2], 'SWAPPING');
 
                         // After swap, check if any matches are formed
-                        if (findMatches().length > 0) {
+                        if (findMatches().matches.length > 0) { // Check .matches
                             // If match, process the game cycle (remove, drop, fill, cascades)
                             await processGameCycle(true);
                         } else {
@@ -629,52 +666,29 @@
          * @returns {object} An object containing `matchesFound` (boolean) and `specialCreations` (array of {row, col, type}).
          */
         function checkAndResolveMatches(animate) {
-            const matches = findMatches();
-            let matchesFound = matches.length > 0;
-            const specialCreations = []; // Not used directly here, but could be for other special candies
+            const matchResult = findMatches(); // Get the structured result
+            let matchesFound = matchResult.matches.length > 0;
+            const specialCreations = matchResult.specialCreations;
 
             if (matchesFound) {
-                // Filter out matches that are 5-in-a-row for special candy creation
-                const fiveInARowMatches = matches.filter(m => m.length >= 5);
-                const regularMatches = matches.filter(m => m.length < 5);
-
-                // Handle 5-in-a-row matches for color bomb creation
-                fiveInARowMatches.forEach(matchGroup => {
-                    // Pick the first gem in the match group to become the color bomb
-                    const colorBombPos = matchGroup[0];
-                    const gemToReplace = board[colorBombPos.row][colorBombPos.col];
-
-                    if (gemToReplace) {
-                        // Mark other gems in the 5-match for removal
-                        matchGroup.forEach(m => {
-                            if (!(m.row === colorBombPos.row && m.col === colorBombPos.col)) {
-                                const gem = board[m.row][m.col];
-                                if (gem) {
-                                    if (animate) {
-                                        gem.state = 'REMOVING';
-                                    } else {
-                                        gem.type = null;
-                                        gem.alpha = 0;
-                                        gem.state = 'REMOVED';
-                                    }
-                                }
-                            }
-                        });
-
-                        // Create the color bomb at the chosen position
-                        gemToReplace.type = COLOR_BOMB_TYPE;
-                        gemToReplace.state = 'IDLE'; // Or a special creation animation state
-                        gemToReplace.alpha = 1; // Ensure it's visible
-                        specialCreations.push({ row: colorBombPos.row, col: colorBombPos.col, type: COLOR_BOMB_TYPE });
-                        updateScore(matchGroup.length * 10); // Score for the 5-match
+                // Process special creations first (4-in-a-row for bomb, 5-in-a-row for color bomb)
+                specialCreations.forEach(creation => {
+                    const gemToTransform = board[creation.row][creation.col];
+                    if (gemToTransform) {
+                        gemToTransform.type = creation.type;
+                        gemToTransform.state = 'IDLE'; // Can add a specific creation animation later
+                        gemToTransform.alpha = 1;
                     }
                 });
 
-                // Handle regular matches (3 or 4 in a row)
-                regularMatches.forEach(matchGroup => {
+                // Now, remove the matched gems (excluding the ones that became special candies)
+                const removedGems = [];
+                matchResult.matches.forEach(matchGroup => {
                     matchGroup.forEach(m => {
                         const gem = board[m.row][m.col];
-                        if (gem) {
+                        // Only remove if it's not a newly created special candy
+                        const isSpecialCandyCreatedHere = specialCreations.some(sc => sc.row === m.row && sc.col === m.col);
+                        if (gem && gem.type !== null && !isSpecialCandyCreatedHere) {
                             if (animate) {
                                 gem.state = 'REMOVING';
                             } else {
@@ -682,10 +696,12 @@
                                 gem.alpha = 0;
                                 gem.state = 'REMOVED';
                             }
+                            removedGems.push(gem);
                         }
                     });
-                    updateScore(matchGroup.length * 10); // Score for regular matches
+                    updateScore(matchGroup.length * 10); // Score for each match group
                 });
+
 
                 // If not animating, immediately apply changes
                 if (!animate) {
@@ -693,7 +709,7 @@
                     fillEmptySpots(false);
                     drawBoard(); // Redraw immediately
                     // Recursively check for new matches until stable
-                    if (findMatches().length > 0) {
+                    if (findMatches().matches.length > 0) { // Check .matches
                         checkAndResolveMatches(false); // Recursive call for cascades
                     }
                 }
@@ -703,18 +719,21 @@
 
         /**
          * Finds all horizontal and vertical matches of 3 or more gems.
-         * Returns an array of arrays, where each inner array is a group of matched gem coordinates.
-         * @returns {Array<Array<Object>>} An array of arrays, each containing {row, col} objects for a match group.
+         * Returns an object containing:
+         * - `matches`: An array of arrays, where each inner array is a group of matched gem coordinates.
+         * - `specialCreations`: An array of objects {type, row, col} for special candies to be created.
+         * @returns {object} { matches: Array<Array<Object>>, specialCreations: Array<{ type: string, row: number, col: number }> }
          */
         function findMatches() {
             const allMatches = []; // Stores arrays of {row, col} for each match group
-            const matchedPositions = new Set(); // To avoid duplicate processing of gems in L/T shapes
+            const specialCreations = [];
+            const processedPositions = new Set(); // To avoid duplicate processing of gems in L/T shapes
 
             // Helper to add a match group to allMatches
             const addMatchGroup = (group) => {
                 if (group.length >= 3) {
                     allMatches.push(group);
-                    group.forEach(m => matchedPositions.add(JSON.stringify(m)));
+                    group.forEach(m => processedPositions.add(JSON.stringify(m)));
                 }
             };
 
@@ -722,7 +741,7 @@
             for (let r = 0; r < BOARD_ROWS; r++) {
                 for (let c = 0; c < BOARD_COLS - 2; c++) {
                     const gemType = board[r][c]?.type;
-                    if (gemType === null || gemType === undefined || gemType === COLOR_BOMB_TYPE) continue; // Skip empty or color bombs
+                    if (gemType === null || gemType === undefined || gemType === COLOR_BOMB_TYPE || gemType === BOMB_TYPE) continue; // Skip special candies for regular matches
 
                     const currentGroup = [{ row: r, col: c }];
                     for (let k = c + 1; k < BOARD_COLS; k++) {
@@ -740,7 +759,7 @@
             for (let c = 0; c < BOARD_COLS; c++) {
                 for (let r = 0; r < BOARD_ROWS - 2; r++) {
                     const gemType = board[r][c]?.type;
-                    if (gemType === null || gemType === undefined || gemType === COLOR_BOMB_TYPE) continue; // Skip empty or color bombs
+                    if (gemType === null || gemType === undefined || gemType === COLOR_BOMB_TYPE || gemType === BOMB_TYPE) continue; // Skip special candies for regular matches
 
                     const currentGroup = [{ row: r, col: c }];
                     for (let k = r + 1; k < BOARD_ROWS; k++) {
@@ -754,84 +773,137 @@
                 }
             }
 
-            // Filter out duplicate positions if a gem is part of multiple matches (e.g., L/T shapes)
-            // This ensures each gem is only removed once, and special candies are created correctly.
+            // Process unique matches and identify special candy creations
             const uniqueMatches = [];
-            const processedPositions = new Set(); // To track positions already added to uniqueMatches
+            const tempProcessedForSpecial = new Set(); // To ensure a gem only creates one special candy
+
             allMatches.forEach(group => {
-                const uniqueGroup = group.filter(m => !processedPositions.has(JSON.stringify(m)));
-                if (uniqueGroup.length > 0) {
-                    uniqueMatches.push(uniqueGroup);
-                    uniqueGroup.forEach(m => processedPositions.add(JSON.stringify(m)));
+                const filteredGroup = group.filter(m => !tempProcessedForSpecial.has(JSON.stringify(m)));
+
+                if (filteredGroup.length > 0) {
+                    uniqueMatches.push(filteredGroup); // Add the filtered group
+
+                    // Check for special candy creation from this filtered group
+                    if (filteredGroup.length >= 5) {
+                        // 5-in-a-row creates a Color Bomb
+                        const creationPos = filteredGroup[0]; // Choose the first gem for the special candy
+                        specialCreations.push({ type: COLOR_BOMB_TYPE, row: creationPos.row, col: creationPos.col });
+                        filteredGroup.forEach(m => tempProcessedForSpecial.add(JSON.stringify(m))); // Mark all as processed
+                    } else if (filteredGroup.length === 4) {
+                        // 4-in-a-row creates a Bomb
+                        const creationPos = filteredGroup[0]; // Choose the first gem for the special candy
+                        specialCreations.push({ type: BOMB_TYPE, row: creationPos.row, col: creationPos.col });
+                        filteredGroup.forEach(m => tempProcessedForSpecial.add(JSON.stringify(m))); // Mark all as processed
+                    }
                 }
             });
 
-            return uniqueMatches;
+            // Filter out gems that became special candies from the regular matches list
+            const finalMatches = uniqueMatches.map(group =>
+                group.filter(m => {
+                    const isSpecial = specialCreations.some(sc => sc.row === m.row && sc.col === m.col);
+                    return !isSpecial;
+                })
+            ).filter(group => group.length > 0); // Remove empty groups
+
+            return { matches: finalMatches, specialCreations: specialCreations };
         }
 
         /**
          * Removes matched gems (sets their type to null and starts removal animation).
-         * For 5-in-a-row matches, it creates a color bomb.
-         * @param {Array<Array<Object>>} matches - An array of match groups (each an array of {row, col}).
+         * This function now takes the structured match result.
+         * @param {object} matchResult - Object containing `matches` and `specialCreations`.
          * @param {boolean} animate - Whether to animate the removal.
-         * @returns {object} An object containing `removedGems` (array of Gem objects that were removed) and `specialCreations` (array of {row, col, type}).
+         * @returns {object} An object containing `removedGems` (array of Gem objects that were removed).
          */
-        function removeMatches(matches, animate) {
+        function removeMatches(matchResult, animate) {
             const removedGems = [];
-            const specialCreations = []; // Not used directly here, but could be for other special candies
+            const { matches, specialCreations } = matchResult;
 
-            matches.forEach(matchGroup => {
-                // Check if this is a 5-in-a-row match
-                if (matchGroup.length >= 5) {
-                    // Pick the first gem in the match group to become the color bomb
-                    const colorBombPos = matchGroup[0];
-                    const gemToReplace = board[colorBombPos.row][colorBombPos.col];
-
-                    if (gemToReplace) {
-                        // Mark other gems in the 5-match for removal
-                        matchGroup.forEach(m => {
-                            if (!(m.row === colorBombPos.row && m.col === colorBombPos.col)) {
-                                const gem = board[m.row][m.col];
-                                if (gem) {
-                                    if (animate) {
-                                        gem.state = 'REMOVING';
-                                    } else {
-                                        gem.type = null;
-                                        gem.alpha = 0;
-                                        gem.state = 'REMOVED';
-                                    }
-                                    removedGems.push(gem);
-                                }
-                            }
-                        });
-
-                        // Create the color bomb at the chosen position
-                        gemToReplace.type = COLOR_BOMB_TYPE;
-                        gemToReplace.state = 'IDLE'; // Or a special creation animation state
-                        gemToReplace.alpha = 1; // Ensure it's visible
-                        specialCreations.push({ row: colorBombPos.row, col: colorBombPos.col, type: COLOR_BOMB_TYPE });
-                        updateScore(matchGroup.length * 10); // Score for the 5-match
-                    }
-                } else {
-                    // Regular match (3 or 4 in a row) - remove all gems in the group
-                    matchGroup.forEach(m => {
-                        const gem = board[m.row][m.col];
-                        if (gem) {
-                            if (animate) {
-                                gem.state = 'REMOVING';
-                            } else {
-                                gem.type = null;
-                                gem.alpha = 0;
-                                gem.state = 'REMOVED';
-                            }
-                            removedGems.push(gem);
-                        }
-                    });
-                    updateScore(matchGroup.length * 10); // Score for regular matches
+            // First, process special creations: transform the gem at the designated spot
+            specialCreations.forEach(creation => {
+                const gem = board[creation.row][creation.col];
+                if (gem) {
+                    gem.type = creation.type;
+                    gem.state = 'IDLE'; // Or a specific creation animation state
+                    gem.alpha = 1;
                 }
             });
-            return { removedGems, specialCreations };
+
+            // Then, process the regular matches for removal, excluding any that became special candies
+            matches.forEach(matchGroup => {
+                matchGroup.forEach(m => {
+                    const gem = board[m.row][m.col];
+                    // Ensure this gem wasn't just converted into a special candy
+                    const isNowSpecial = specialCreations.some(sc => sc.row === m.row && sc.col === m.col);
+
+                    if (gem && gem.type !== null && !isNowSpecial) {
+                        if (animate) {
+                            gem.state = 'REMOVING';
+                        } else {
+                            gem.type = null;
+                            gem.alpha = 0;
+                            gem.state = 'REMOVED';
+                        }
+                        removedGems.push(gem);
+                    }
+                });
+            });
+            return { removedGems };
         }
+
+        /**
+         * Activates a bomb, clearing candies in a 3x3 area around it.
+         * @param {Gem} bombGem - The bomb gem that was activated.
+         * @param {boolean} animate - Whether to animate the clearing.
+         * @returns {Promise<void>} A promise that resolves when the clearing animation is complete.
+         */
+        async function activateBomb(bombGem, animate) {
+            const gemsToClear = [];
+            const bombRow = bombGem.row;
+            const bombCol = bombGem.col;
+
+            // Remove the bomb itself
+            if (animate) {
+                bombGem.state = 'REMOVING';
+            } else {
+                bombGem.type = null;
+                bombGem.alpha = 0;
+                bombGem.state = 'REMOVED';
+            }
+            gemsToClear.push(bombGem);
+            updateScore(50); // Score for activating bomb
+
+            // Define the 3x3 area
+            const startRow = Math.max(0, bombRow - 1);
+            const endRow = Math.min(BOARD_ROWS - 1, bombRow + 1);
+            const startCol = Math.max(0, bombCol - 1);
+            const endCol = Math.min(BOARD_COLS - 1, bombCol + 1);
+
+            for (let r = startRow; r <= endRow; r++) {
+                for (let c = startCol; c <= endCol; c++) {
+                    const gem = board[r][c];
+                    // Clear if it's a valid gem and not the bomb itself (already handled)
+                    if (gem && gem.type !== null && gem !== bombGem) {
+                        if (animate) {
+                            gem.state = 'REMOVING';
+                        } else {
+                            gem.type = null;
+                            gem.alpha = 0;
+                            gem.state = 'REMOVED';
+                        }
+                        gemsToClear.push(gem);
+                        updateScore(10); // Score for each cleared gem
+                    }
+                }
+            }
+
+            if (animate) {
+                await waitForAnimations(gemsToClear, 'REMOVING');
+            }
+            playSound(soundDelete); // Play delete sound after bomb clears
+        }
+
 
         /**
          * Activates a color bomb, clearing all candies of a specific type or the entire board.
@@ -882,6 +954,53 @@
                     targetGem.state = 'REMOVED';
                 }
                 gemsToClear.push(targetGem);
+            } else if (targetGem.type === BOMB_TYPE) {
+                // Color bomb swapped with a regular bomb - clear all regular candies AND activate all other bombs
+                targetTypeToClear = null; // No specific color, clear all regular
+                const bombsToActivate = [];
+
+                for (let r = 0; r < BOARD_ROWS; r++) {
+                    for (let c = 0; c < BOARD_COLS; c++) {
+                        const gem = board[r][c];
+                        if (gem && gem.type !== null && gem !== colorBomb && gem !== targetGem) {
+                            if (gem.type === BOMB_TYPE) {
+                                bombsToActivate.push(gem);
+                            } else {
+                                // Clear regular candies
+                                if (animate) {
+                                    gem.state = 'REMOVING';
+                                } else {
+                                    gem.type = null;
+                                    gem.alpha = 0;
+                                    gem.state = 'REMOVED';
+                                }
+                                gemsToClear.push(gem);
+                                updateScore(10);
+                            }
+                        }
+                    }
+                }
+                // Also remove the target bomb
+                if (animate) {
+                    targetGem.state = 'REMOVING';
+                } else {
+                    targetGem.type = null;
+                    targetGem.alpha = 0;
+                    targetGem.state = 'REMOVED';
+                }
+                gemsToClear.push(targetGem);
+
+                if (animate) {
+                    await waitForAnimations(gemsToClear, 'REMOVING');
+                }
+                // Recursively activate other bombs found
+                for (const bomb of bombsToActivate) {
+                    // Ensure the bomb is still on the board and not already removed
+                    if (bomb.type === BOMB_TYPE) {
+                        await activateBomb(bomb, animate); // This will recursively call processGameCycle
+                    }
+                }
+
             } else {
                 // Color bomb swapped with a regular candy - clear all of that type
                 targetTypeToClear = targetGem.type;
@@ -903,9 +1022,10 @@
                 }
             }
 
-            if (animate) {
+            if (animate && gemsToClear.length > 0) {
                 await waitForAnimations(gemsToClear, 'REMOVING');
             }
+            playSound(soundDelete); // Play delete sound after color bomb clears
         }
 
 
@@ -1003,8 +1123,13 @@
                             originalGem.type = neighborGemType;
                             neighborGem.type = originalGemType;
 
-                            if (findMatches().length > 0 || (originalGem.type === COLOR_BOMB_TYPE && neighborGemType !== COLOR_BOMB_TYPE) || (neighborGem.type === COLOR_BOMB_TYPE && originalGemType !== COLOR_BOMB_TYPE)) {
-                                // If a match is found OR a color bomb is involved in a swap
+                            const matchesAfterSwap = findMatches().matches;
+                            if (matchesAfterSwap.length > 0 ||
+                                (originalGem.type === COLOR_BOMB_TYPE && neighborGemType !== COLOR_BOMB_TYPE) ||
+                                (neighborGem.type === COLOR_BOMB_TYPE && originalGemType !== COLOR_BOMB_TYPE) ||
+                                (originalGem.type === BOMB_TYPE) || // Bomb activation is always a valid move
+                                (neighborGem.type === BOMB_TYPE)
+                            ) {
                                 // Swap back
                                 originalGem.type = originalGemType;
                                 neighborGem.type = neighborGemType;
@@ -1026,8 +1151,13 @@
                             originalGem.type = neighborGemType;
                             neighborGem.type = originalGemType;
 
-                            if (findMatches().length > 0 || (originalGem.type === COLOR_BOMB_TYPE && neighborGemType !== COLOR_BOMB_TYPE) || (neighborGem.type === COLOR_BOMB_TYPE && originalGemType !== COLOR_BOMB_TYPE)) {
-                                // If a match is found OR a color bomb is involved in a swap
+                            const matchesAfterSwap = findMatches().matches;
+                            if (matchesAfterSwap.length > 0 ||
+                                (originalGem.type === COLOR_BOMB_TYPE && neighborGemType !== COLOR_BOMB_TYPE) ||
+                                (neighborGem.type === COLOR_BOMB_TYPE && originalGemType !== COLOR_BOMB_TYPE) ||
+                                (originalGem.type === BOMB_TYPE) || // Bomb activation is always a valid move
+                                (neighborGem.type === BOMB_TYPE)
+                            ) {
                                 // Swap back
                                 originalGem.type = originalGemType;
                                 neighborGem.type = neighborGemType;
@@ -1063,5 +1193,3 @@
     </script>
 </body>
 </html>
-v1.1.2
-
