@@ -176,6 +176,11 @@
         soundAmbientMusic.loop = true; // Loop the ambient music
         let musicStarted = false; // Flag to track if music has started
 
+        // Swipe tracking variables
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let swipeThreshold = 20; // Minimum pixel distance for a swipe to be registered
+
         /**
          * Plays a specified sound.
          * @param {Audio} sound - The Audio object to play.
@@ -191,13 +196,13 @@
             constructor(row, col, type) {
                 this.row = row;
                 this.col = col;
-                this.type = type;
                 this.x = col * GEM_SIZE; // Current pixel X
                 this.y = row * GEM_SIZE; // Current pixel Y
                 this.targetX = this.x;   // Target pixel X
                 this.targetY = this.y;   // Target pixel Y
                 this.alpha = 1;          // Opacity for fading
                 this.state = 'IDLE';     // 'IDLE', 'SWAPPING', 'FALLING', 'REMOVING', 'APPEARING'
+                this.type = type;
             }
 
             /**
@@ -419,80 +424,112 @@
         }
 
         /**
-         * Processes the entire game cycle after a player's move or a cascade.
-         * This includes finding matches, removing them, dropping gems, filling new gems,
-         * and recursively checking for new cascades until the board is stable.
-         * @param {boolean} animate - Whether to animate the process.
+         * Handles the core swap and game cycle logic for both taps and swipes.
+         * @param {number} r1 - Row of the first gem.
+         * @param {number} c1 - Column of the first gem.
+         * @param {number} r2 - Row of the second gem.
+         * @param {number} c2 - Column of the second gem.
          */
-        async function processGameCycle(animate) {
-            inputBlocked = true; // Block input during the entire game cycle
+        async function handleSwap(r1, c1, r2, c2) {
+            // Check if gems are adjacent (horizontally or vertically)
+            const isAdjacent = (
+                (Math.abs(r1 - r2) === 1 && c1 === c2) || // Vertical
+                (Math.abs(c1 - c2) === 1 && r1 === r2)   // Horizontal
+            );
 
-            let currentMatches;
-            let didAnyGemsChange = false; // Flag to track if any gems were removed or moved
-
-            do {
-                didAnyGemsChange = false; // Reset for each iteration of the cascade loop
-                currentMatches = findMatches();
-
-                if (currentMatches.matches.length > 0) { // Check currentMatches.matches
-                    didAnyGemsChange = true; // Mark that matches were found
-                    updateScore(currentMatches.matches.length * 10);
-                    playSound(soundDelete); // Play delete sound for regular matches
-
-                    // Phase 1: Remove matches (fade out) and create special candies
-                    const { removedGems } = removeMatches(currentMatches, animate); // Pass the full object
-                    if (animate) {
-                        // Wait for all removed gems to complete their REMOVING animation
-                        await waitForAnimations(removedGems, 'REMOVING');
-                    }
-                }
-
-                // Always perform drops and fills if any gems were removed or if there are empty spots
-                // This is crucial for color bomb effects and general gravity/refill
-                const gemsBeforeDrop = board.flat().filter(gem => gem && gem.type !== null).length;
-                dropGems(animate);
-                const gemsAfterDrop = board.flat().filter(gem => gem && gem.type !== null).length;
-                if (gemsBeforeDrop !== gemsAfterDrop) { // If gems actually moved/dropped
-                    didAnyGemsChange = true;
-                }
-
-                if (animate) {
-                    const fallingGems = board.flat().filter(gem => gem && gem.state === 'FALLING');
-                    await waitForAnimations(fallingGems, 'FALLING');
-                }
-
-                const emptySpotsBeforeFill = board.flat().filter(gem => gem && gem.type === null).length;
-                fillEmptySpots(animate);
-                const emptySpotsAfterFill = board.flat().filter(gem => gem && gem.type === null).length;
-                if (emptySpotsBeforeFill !== emptySpotsAfterFill) { // If new gems were added
-                    didAnyGemsChange = true;
-                }
-
-                if (animate) {
-                    // New gems created in fillEmptySpots are set to 'FALLING' state
-                    const appearingAndFallingGems = board.flat().filter(gem => gem && gem.state === 'FALLING');
-                    await waitForAnimations(appearingAndFallingGems, 'FALLING');
-                }
-
-                // Continue looping if any matches were found OR if gems moved/appeared
-            } while (didAnyGemsChange || findMatches().matches.length > 0); // Check currentMatches.matches
-
-            inputBlocked = false; // Unblock input when all animations and cascades are done
-
-            // Final check for game over
-            if (!checkForPossibleMoves()) {
-                gameOver();
+            if (!isAdjacent) {
+                selectedGem = null;
+                return;
             }
-        }
 
+            inputBlocked = true; // Block input during swap animation and subsequent logic
+
+            // Get gem objects
+            const gem1 = board[r1][c1];
+            const gem2 = board[r2][c2];
+
+            // --- Handle Special Candy Swaps (Color Bomb or Bomb) ---
+            if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE || gem1.type === BOMB_TYPE || gem2.type === BOMB_TYPE) {
+                playSound(soundSwap); // Play swap sound for special candy swaps
+
+                // Perform the swap visually
+                gem1.targetX = c2 * GEM_SIZE;
+                gem1.targetY = r2 * GEM_SIZE;
+                gem1.state = 'SWAPPING';
+
+                gem2.targetX = c1 * GEM_SIZE;
+                gem2.targetY = r1 * GEM_SIZE;
+                gem2.state = 'SWAPPING';
+                swapGemsInBoard(r1, c1, r2, c2);
+                await waitForAnimations([gem1, gem2], 'SWAPPING');
+
+                // Determine which special candy (if any) was involved and activate
+                if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE) {
+                    let colorBomb = (gem1.type === COLOR_BOMB_TYPE) ? gem1 : gem2;
+                    let targetGem = (colorBomb === gem1) ? gem2 : gem1;
+                    playSound(soundRainbowActivate); // Play rainbow activate sound
+                    await activateColorBomb(colorBomb, targetGem, true);
+                } else if (gem1.type === BOMB_TYPE) {
+                    playSound(soundBombExplode); // Play bomb explode sound
+                    await activateBomb(gem1, true);
+                } else if (gem2.type === BOMB_TYPE) {
+                    playSound(soundBombExplode); // Play bomb explode sound
+                    await activateBomb(gem2, true);
+                }
+
+                await processGameCycle(true); // Process the resulting cascade
+                inputBlocked = false; // Unblock after bomb effect and cascade
+            }
+            // --- Regular Swap Logic ---
+            else {
+                playSound(soundSwap); // Play swap sound for regular swaps
+
+                // Set target positions for animation
+                gem1.targetX = c2 * GEM_SIZE;
+                gem1.targetY = r2 * GEM_SIZE;
+                gem1.state = 'SWAPPING';
+
+                gem2.targetX = c1 * GEM_SIZE;
+                gem2.targetY = r1 * GEM_SIZE;
+                gem2.state = 'SWAPPING';
+
+                // Update board array immediately for logic
+                swapGemsInBoard(r1, c1, r2, c2);
+
+                // Wait for the swap animation to complete
+                await waitForAnimations([gem1, gem2], 'SWAPPING');
+
+                // After swap, check if any matches are formed
+                if (findMatches().matches.length > 0) { // Check .matches
+                    // If match, process the game cycle (remove, drop, fill, cascades)
+                    await processGameCycle(true);
+                } else {
+                    // If no match, swap back
+                    // Animate gems sliding back
+                    gem1.targetX = c1 * GEM_SIZE;
+                    gem1.targetY = r1 * GEM_SIZE;
+                    gem1.state = 'SWAPPING';
+
+                    gem2.targetX = c2 * GEM_SIZE;
+                    gem2.targetY = r2 * GEM_SIZE;
+                    gem2.state = 'SWAPPING';
+
+                    swapGemsInBoard(r1, c1, r2, c2); // Swap back in board array
+
+                    await waitForAnimations([gem1, gem2], 'SWAPPING'); // Wait for reverse swap animation
+                }
+                inputBlocked = false; // Unblock input after reverse swap
+            }
+            selectedGem = null; // Reset selection after attempting a swap
+        }
 
         // --- Event Handling ---
 
         /**
-         * Handles click/touch events on the canvas.
-         * @param {Event} event - The click or touch event object.
+         * Handles click events on the canvas (for tap-to-select functionality).
+         * @param {Event} event - The click event object.
          */
-        canvas.addEventListener('click', async (event) => { // Made async to use await
+        canvas.addEventListener('click', async (event) => {
             // Start ambient music on first click
             if (!musicStarted) {
                 soundAmbientMusic.play().catch(e => console.error("Error playing ambient music:", e));
@@ -503,11 +540,8 @@
 
             const rect = canvas.getBoundingClientRect();
             // Calculate mouse/touch coordinates relative to the canvas
-            const clientX = event.clientX || event.touches[0].clientX;
-            const clientY = event.clientY || event.touches[0].clientY;
-
-            const mouseX = clientX - rect.left;
-            const mouseY = clientY - rect.top;
+            const mouseX = event.clientX - rect.left;
+            const mouseY = event.clientY - rect.top;
 
             // Determine the clicked grid cell
             const clickedCol = Math.floor(mouseX / GEM_SIZE);
@@ -526,7 +560,6 @@
                 return; // Exit as bomb was activated directly
             }
 
-
             if (selectedGem === null) {
                 // First gem selected
                 selectedGem = { row: clickedRow, col: clickedCol };
@@ -537,105 +570,101 @@
                 const secondGemRow = clickedRow;
                 const secondGemCol = clickedCol;
 
+                // Call the main swap handler
+                await handleSwap(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
 
-                // Check if gems are adjacent (horizontally or vertically)
-                const isAdjacent = (
-                    (Math.abs(firstGemRow - secondGemRow) === 1 && firstGemCol === secondGemCol) || // Vertical
-                    (Math.abs(firstGemCol - secondGemCol) === 1 && firstGemRow === secondGemRow)   // Horizontal
-                );
-
-                if (isAdjacent) {
-                    inputBlocked = true; // Block input during swap animation and subsequent logic
-
-                    // Get gem objects
-                    const gem1 = board[firstGemRow][firstGemCol];
-                    const gem2 = board[secondGemRow][secondGemCol];
-
-                    // --- Handle Special Candy Swaps (Color Bomb or Bomb) ---
-                    if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE || gem1.type === BOMB_TYPE || gem2.type === BOMB_TYPE) {
-                        playSound(soundSwap); // Play swap sound for special candy swaps
-
-                        // Perform the swap visually
-                        gem1.targetX = secondGemCol * GEM_SIZE;
-                        gem1.targetY = secondGemRow * GEM_SIZE;
-                        gem1.state = 'SWAPPING';
-
-                        gem2.targetX = firstGemCol * GEM_SIZE;
-                        gem2.targetY = firstGemRow * GEM_SIZE;
-                        gem2.state = 'SWAPPING';
-                        swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
-                        await waitForAnimations([gem1, gem2], 'SWAPPING');
-
-                        // Determine which special candy (if any) was involved and activate
-                        if (gem1.type === COLOR_BOMB_TYPE || gem2.type === COLOR_BOMB_TYPE) {
-                            let colorBomb = (gem1.type === COLOR_BOMB_TYPE) ? gem1 : gem2;
-                            let targetGem = (colorBomb === gem1) ? gem2 : gem1;
-                            playSound(soundRainbowActivate); // Play rainbow activate sound
-                            await activateColorBomb(colorBomb, targetGem, true);
-                        } else if (gem1.type === BOMB_TYPE) {
-                            playSound(soundBombExplode); // Play bomb explode sound
-                            await activateBomb(gem1, true);
-                        } else if (gem2.type === BOMB_TYPE) {
-                            playSound(soundBombExplode); // Play bomb explode sound
-                            await activateBomb(gem2, true);
-                        }
-
-                        await processGameCycle(true); // Process the resulting cascade
-                        inputBlocked = false; // Unblock after bomb effect and cascade
-                    }
-                    // --- Regular Swap Logic ---
-                    else {
-                        playSound(soundSwap); // Play swap sound for regular swaps
-
-                        // Set target positions for animation
-                        gem1.targetX = secondGemCol * GEM_SIZE;
-                        gem1.targetY = secondGemRow * GEM_SIZE;
-                        gem1.state = 'SWAPPING';
-
-                        gem2.targetX = firstGemCol * GEM_SIZE;
-                        gem2.targetY = firstGemRow * GEM_SIZE;
-                        gem2.state = 'SWAPPING';
-
-                        // Update board array immediately for logic
-                        swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
-
-                        // Wait for the swap animation to complete
-                        await waitForAnimations([gem1, gem2], 'SWAPPING');
-
-                        // After swap, check if any matches are formed
-                        if (findMatches().matches.length > 0) { // Check .matches
-                            // If match, process the game cycle (remove, drop, fill, cascades)
-                            await processGameCycle(true);
-                        } else {
-                            // If no match, swap back
-                            // Animate gems sliding back
-                            gem1.targetX = firstGemCol * GEM_SIZE;
-                            gem1.targetY = firstGemRow * GEM_SIZE;
-                            gem1.state = 'SWAPPING';
-
-                            gem2.targetX = secondGemCol * GEM_SIZE;
-                            gem2.targetY = secondGemRow * GEM_SIZE;
-                            gem2.state = 'SWAPPING';
-
-                            swapGemsInBoard(firstGemRow, firstGemCol, secondGemRow, secondGemCol); // Swap back in board array
-
-                            await waitForAnimations([gem1, gem2], 'SWAPPING'); // Wait for reverse swap animation
-                            inputBlocked = false; // Unblock input after reverse swap
-                        }
-                    }
-                }
-                selectedGem = null; // Reset selection after attempting a swap
             }
         });
 
-        // Add touch event listeners for mobile devices
+        // Add touch event listeners for swipe functionality
         canvas.addEventListener('touchstart', (event) => {
             event.preventDefault(); // Prevent scrolling
-            canvas.dispatchEvent(new MouseEvent('click', {
-                clientX: event.touches[0].clientX,
-                clientY: event.touches[0].clientY
-            }));
+            if (!gameActive || inputBlocked) return;
+            const rect = canvas.getBoundingClientRect();
+            touchStartX = event.touches[0].clientX - rect.left;
+            touchStartY = event.touches[0].clientY - rect.top;
+
+            const startCol = Math.floor(touchStartX / GEM_SIZE);
+            const startRow = Math.floor(touchStartY / GEM_SIZE);
+            selectedGem = { row: startRow, col: startCol };
+
+            // Play music on first touch
+            if (!musicStarted) {
+                soundAmbientMusic.play().catch(e => console.error("Error playing ambient music:", e));
+                musicStarted = true;
+            }
         }, false);
+
+        canvas.addEventListener('touchmove', (event) => {
+            event.preventDefault(); // Prevent scrolling
+        }, false);
+
+        canvas.addEventListener('touchend', async (event) => {
+            if (!gameActive || inputBlocked || selectedGem === null) return;
+            const rect = canvas.getBoundingClientRect();
+            const touchEndX = event.changedTouches[0].clientX - rect.left;
+            const touchEndY = event.changedTouches[0].clientY - rect.top;
+
+            const deltaX = touchEndX - touchStartX;
+            const deltaY = touchEndY - touchStartY;
+
+            const firstGemRow = selectedGem.row;
+            const firstGemCol = selectedGem.col;
+            let secondGemRow = firstGemRow;
+            let secondGemCol = firstGemCol;
+
+            // Check if it's a swipe (and not just a tap)
+            if (Math.abs(deltaX) > swipeThreshold || Math.abs(deltaY) > swipeThreshold) {
+                // Determine swipe direction
+                if (Math.abs(deltaX) > Math.abs(deltaY)) {
+                    // Horizontal swipe
+                    if (deltaX > 0) {
+                        // Swipe Right
+                        secondGemCol = firstGemCol + 1;
+                    } else {
+                        // Swipe Left
+                        secondGemCol = firstGemCol - 1;
+                    }
+                } else {
+                    // Vertical swipe
+                    if (deltaY > 0) {
+                        // Swipe Down
+                        secondGemRow = firstGemRow + 1;
+                    } else {
+                        // Swipe Up
+                        secondGemRow = firstGemRow - 1;
+                    }
+                }
+
+                // Check if the target gem is within the board bounds
+                if (secondGemRow >= 0 && secondGemRow < BOARD_ROWS &&
+                    secondGemCol >= 0 && secondGemCol < BOARD_COLS) {
+                    await handleSwap(firstGemRow, firstGemCol, secondGemRow, secondGemCol);
+                } else {
+                    selectedGem = null;
+                }
+            } else {
+                 // A tap was detected, use the click logic.
+                 const clickedGem = board[firstGemRow][firstGemCol];
+
+                // Check for direct bomb tap activation if it wasn't a swipe
+                if (clickedGem && clickedGem.type === BOMB_TYPE) {
+                    inputBlocked = true;
+                    playSound(soundBombExplode);
+                    await activateBomb(clickedGem, true);
+                    await processGameCycle(true);
+                    inputBlocked = false;
+                    selectedGem = null;
+                } else {
+                    // If it was a tap, we handle it as the first gem selection
+                    // The next tap will be the second gem, handled by the click listener.
+                    // The current selectedGem will be used for the next tap.
+                    // This creates a smoother tap interaction.
+                }
+
+            }
+        });
+
 
         // Restart button click handler
         restartButton.addEventListener('click', () => {
@@ -726,6 +755,73 @@
                 }
             }
             return matchesFound;
+        }
+
+        /**
+         * Processes the entire game cycle after a player's move or a cascade.
+         * This includes finding matches, removing them, dropping gems, filling new gems,
+         * and recursively checking for new cascades until the board is stable.
+         * @param {boolean} animate - Whether to animate the process.
+         */
+        async function processGameCycle(animate) {
+            inputBlocked = true; // Block input during the entire game cycle
+
+            let currentMatches;
+            let didAnyGemsChange = false; // Flag to track if any gems were removed or moved
+
+            do {
+                didAnyGemsChange = false; // Reset for each iteration of the cascade loop
+                currentMatches = findMatches();
+
+                if (currentMatches.matches.length > 0) { // Check currentMatches.matches
+                    didAnyGemsChange = true; // Mark that matches were found
+                    updateScore(currentMatches.matches.length * 10);
+                    playSound(soundDelete); // Play delete sound for regular matches
+
+                    // Phase 1: Remove matches (fade out) and create special candies
+                    const { removedGems } = removeMatches(currentMatches, animate); // Pass the full object
+                    if (animate) {
+                        // Wait for all removed gems to complete their REMOVING animation
+                        await waitForAnimations(removedGems, 'REMOVING');
+                    }
+                }
+
+                // Always perform drops and fills if any gems were removed or if there are empty spots
+                // This is crucial for color bomb effects and general gravity/refill
+                const gemsBeforeDrop = board.flat().filter(gem => gem && gem.type !== null).length;
+                dropGems(animate);
+                const gemsAfterDrop = board.flat().filter(gem => gem && gem.type !== null).length;
+                if (gemsBeforeDrop !== gemsAfterDrop) { // If gems actually moved/dropped
+                    didAnyGemsChange = true;
+                }
+
+                if (animate) {
+                    const fallingGems = board.flat().filter(gem => gem && gem.state === 'FALLING');
+                    await waitForAnimations(fallingGems, 'FALLING');
+                }
+
+                const emptySpotsBeforeFill = board.flat().filter(gem => gem && gem.type === null).length;
+                fillEmptySpots(animate);
+                const emptySpotsAfterFill = board.flat().filter(gem => gem && gem.type === null).length;
+                if (emptySpotsBeforeFill !== emptySpotsAfterFill) { // If new gems were added
+                    didAnyGemsChange = true;
+                }
+
+                if (animate) {
+                    // New gems created in fillEmptySpots are set to 'FALLING' state
+                    const appearingAndFallingGems = board.flat().filter(gem => gem && gem.state === 'FALLING');
+                    await waitForAnimations(appearingAndFallingGems, 'FALLING');
+                }
+
+                // Continue looping if any matches were found OR if gems moved/appeared
+            } while (didAnyGemsChange || findMatches().matches.length > 0); // Check currentMatches.matches
+
+            inputBlocked = false; // Unblock input when all animations and cascades are done
+
+            // Final check for game over
+            if (!checkForPossibleMoves()) {
+                gameOver();
+            }
         }
 
         /**
@@ -1206,4 +1302,3 @@
     </script>
 </body>
 </html>
-v1.4.1
