@@ -990,8 +990,8 @@
             for (let r = startRow; r <= endRow; r++) {
                 for (let c = startCol; c <= endCol; c++) {
                     const gem = board[r][c];
-                    // Clear if it's a valid gem and not the bomb itself (already handled)
-                    if (gem && gem.type !== null && gem !== bombGem) {
+                    // Clear if it's a valid gem and not the bomb itself, and not another special candy
+                    if (gem && gem.type !== null && gem !== bombGem && gem.type !== BOMB_TYPE && gem.type !== COLOR_BOMB_TYPE) {
                         if (animate) {
                             gem.state = 'REMOVING';
                         } else {
@@ -1302,3 +1302,4 @@
     </script>
 </body>
 </html>
+v1.4.1
