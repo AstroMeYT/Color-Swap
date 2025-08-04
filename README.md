@@ -6,3 +6,8 @@ The game is simple to play. Just swipe to slide a color circle with another colo
 
 ### Source Code
 This entire repository is the source code. It needs no compiling, as it is built completely in HTML. All WAV files are the local sound files for music and effects. This project is under a copyleft license, GPL 3.0.
+
+### Version History
+Note: Version History starts with v1.4 due to no active documentation in previous versions.
+- v1.4.1 ; Fixed deletion of rainbows when a bomb explodes near them; saves the rainbow for the user.
+- v1.4  ; Added bombs as an item.
